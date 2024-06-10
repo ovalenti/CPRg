@@ -20,6 +20,9 @@
 #include <memory>
 #include <string>
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+
 #include <grpcpp/ext/proto_server_reflection_plugin.h>
 #include <grpcpp/grpcpp.h>
 #include <grpcpp/health_check_service_interface.h>
@@ -48,21 +51,50 @@ class GreeterServiceImpl final : public Greeter::Service {
   }
 };
 
+static int connect_to_localhost() {
+  int fd = -1;
+  int rc;
+  struct sockaddr_in sockaddr = { 0 };
+
+  fd = socket(AF_INET, SOCK_STREAM, 0);
+
+  sockaddr.sin_family = AF_INET;
+  sockaddr.sin_port = htons(50051);
+  sockaddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+  rc = connect(fd, (struct sockaddr*)&sockaddr, sizeof(sockaddr));
+  if (rc < 0) {
+    perror("connect");
+    close(fd);
+    return -1;
+  }
+  return fd;
+}
+
 void RunServer() {
-  std::string server_address("0.0.0.0:50051");
   GreeterServiceImpl service;
+
+  struct grpc::experimental::ExternalConnectionAcceptor::NewConnectionParameters new_connection = { 0 };
 
   grpc::EnableDefaultHealthCheckService(true);
   //grpc::reflection::InitProtoReflectionServerBuilderPlugin();
   ServerBuilder builder;
-  // Listen on the given address without any authentication mechanism.
-  builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
   // Register "service" as the instance through which we'll communicate with
   // clients. In this case it corresponds to an *synchronous* service.
   builder.RegisterService(&service);
+  new_connection.fd = connect_to_localhost();
+  if (new_connection.fd < 0)
+	  return;
+
+  std::unique_ptr<grpc::experimental::ExternalConnectionAcceptor> connection_acceptor =
+	  builder.experimental().AddExternalConnectionAcceptor(
+			  ServerBuilder::experimental_type::ExternalConnectionType::FROM_FD,
+			  grpc::InsecureServerCredentials());
+
   // Finally assemble the server.
   std::unique_ptr<Server> server(builder.BuildAndStart());
-  std::cout << "Server listening on " << server_address << std::endl;
+
+  connection_acceptor->HandleNewConnection(&new_connection);
 
   // Wait for the server to shutdown. Note that some other thread must be
   // responsible for shutting down the server for this call to ever return.

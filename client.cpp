@@ -20,6 +20,9 @@
 #include <memory>
 #include <string>
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+
 #include <grpcpp/grpcpp.h>
 
 #ifdef BAZEL_BUILD
@@ -72,37 +75,40 @@ class GreeterClient {
 };
 
 int main(int argc, char** argv) {
-  // Instantiate the client. It requires a channel, out of which the actual RPCs
-  // are created. This channel models a connection to an endpoint specified by
-  // the argument "--target=" which is the only expected argument.
-  // We indicate that the channel isn't authenticated (use of
-  // InsecureChannelCredentials()).
-  std::string target_str;
-  std::string arg_str("--target");
-  if (argc > 1) {
-    std::string arg_val = argv[1];
-    size_t start_pos = arg_val.find(arg_str);
-    if (start_pos != std::string::npos) {
-      start_pos += arg_str.size();
-      if (arg_val[start_pos] == '=') {
-        target_str = arg_val.substr(start_pos + 1);
-      } else {
-        std::cout << "The only correct argument syntax is --target="
-                  << std::endl;
-        return 0;
-      }
-    } else {
-      std::cout << "The only acceptable argument is --target=" << std::endl;
-      return 0;
-    }
-  } else {
-    target_str = "localhost:50051";
+  int server_port = 50051;
+  int listening_socket;
+  struct sockaddr_in sockaddr = { 0 };
+  int rc;
+
+  listening_socket = socket(AF_INET, SOCK_STREAM, 0);
+
+  sockaddr.sin_family = AF_INET;
+  sockaddr.sin_port = htons(50051);
+  sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+  rc = bind(listening_socket, (struct sockaddr*)&sockaddr, sizeof(sockaddr));
+
+  if (rc < 0) {
+    perror("bind");
+    return 1;
   }
-  GreeterClient greeter(
-      grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()));
-  std::string user("world");
-  std::string reply = greeter.SayHello(user);
-  std::cout << "Greeter received: " << reply << std::endl;
+
+  listen(listening_socket, 8);
+
+  while (1) {
+    int fd = accept(listening_socket, NULL, NULL);
+
+    if (fd < 0) {
+      break;
+    }
+
+    GreeterClient greeter(
+        grpc::CreateInsecureChannelFromFd("listen", fd));
+
+    std::string user("world");
+    std::string reply = greeter.SayHello(user);
+    std::cout << "Greeter received: " << reply << std::endl;
+  }
 
   return 0;
 }
